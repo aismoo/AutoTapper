@@ -54,7 +54,8 @@ static PfnScheduleWithRunLoop     pScheduleRL      = NULL;
 static PfnUnscheduleFromRunLoop   pUnscheduleRL    = NULL;
 
 static void *pRegisterCBBlock = NULL;   /* IOHIDEventSystemClientRegisterEventBlock */
-static void *pUnregisterCB    = NULL;
+static void *pUnregisterCB    = NULL;   /* ...UnregisterEventCallback（C 回调版） */
+static void *pUnregisterCBBlk = NULL;   /* ...UnregisterEventBlock（block 版） */
 
 static IOHIDEventSystemClientRef gEventClient = NULL;   /* 注入用 client */
 static int   gClientType      = -2;                     /* 实际用到的 client type */
@@ -110,6 +111,7 @@ void YGHIDResolve(void) {
         pUnscheduleRL     = (PfnUnscheduleFromRunLoop)dlsym(h, "IOHIDEventSystemClientUnscheduleFromRunLoop");
         pRegisterCBBlock  = dlsym(h, "IOHIDEventSystemClientRegisterEventBlock");
         pUnregisterCB     = dlsym(h, "IOHIDEventSystemClientUnregisterEventCallback");
+        pUnregisterCBBlk  = dlsym(h, "IOHIDEventSystemClientUnregisterEventBlock");
 
         gResolved = YES;
         YGLOG(@"HID symbols: finger=%p digitizer=%p client=%p clientTyped=%p dispatch=%p",
@@ -323,6 +325,15 @@ static YGKeyMonitor gKeyMon = { NULL, NULL, NULL, NO, NO };
 static YGHIDKeyCallback gKeyCB = NULL;
 static pthread_mutex_t gKeyLock = PTHREAD_MUTEX_INITIALIZER;
 
+/*
+ * block 版注册要用到的两块状态，必须是文件级（而不是函数内 static）：
+ *   1) gKeyBlock  —— 注册进去的 block 必须全局强引用，否则被释放后回调即野指针；
+ *   2) gKeyUsedBlock —— 记录本次到底走的是 block 还是 C 回调，
+ *      停机时必须用**对应**的 unregister，拿错 API 解除不了注册。
+ */
+static id  gKeyBlock     = nil;
+static BOOL gKeyUsedBlock = NO;
+
 /// 真实回调签名（C 函数指针版）：
 ///   void cb(void *target, void *refcon, IOHIDServiceClientRef service, IOHIDEventRef event)
 static void YGKeyEventCallback(void *target, void *refcon,
@@ -383,6 +394,7 @@ BOOL YGHIDStartKeyMonitor(YGHIDKeyCallback cb) {
 
     if (pRegisterCB) {
         pRegisterCB(client, (void *)YGKeyEventCallback, NULL, NULL);
+        gKeyUsedBlock = NO;
         YGLOG(@"HID key: 用 C callback 注册成功");
     } else {
         // 新版只暴露 block 版本。**必须 copy 到堆上**：
@@ -392,15 +404,14 @@ BOOL YGHIDStartKeyMonitor(YGHIDKeyCallback cb) {
         id block = [^(void *target, void *refcon, IOHIDServiceClientRef service, IOHIDEventRef event) {
             YGKeyEventCallback(target, refcon, service, event);
         } copy];
-        static id sKeyBlock = nil;
-        sKeyBlock = block;      // 全局强引用，防止被释放
+        gKeyBlock = block;      // 文件级强引用，防止被释放
+        gKeyUsedBlock = YES;
         fn(client, block, NULL, NULL);
         YGLOG(@"HID key: 用 block 注册成功");
     }
 
     // 专用线程跑 runloop —— 不污染 SpringBoard 主 runloop（主线程 mode 常被切换）
     gKeyMon.running = YES;
-    __weak typeof(NSObject) *weakGuard = nil; (void)weakGuard;
 
     NSThread *th = [[NSThread alloc] initWithBlock:^{
         CFRunLoopRef rl = CFRunLoopGetCurrent();
@@ -437,10 +448,30 @@ void YGHIDStopKeyMonitor(void) {
     }
     gKeyMon.running = NO;
 
-    if (gKeyMon.client && pUnregisterCB) {
-        typedef void (*PfnUnreg)(IOHIDEventSystemClientRef, void *);
-        ((PfnUnreg)pUnregisterCB)(gKeyMon.client, (void *)YGKeyEventCallback);
+    /*
+     * 解除注册必须用**与注册相同**的 API：
+     *   注册走 C callback  → 解注册走 IOHIDEventSystemClientUnregisterEventCallback
+     *   注册走 block       → 解注册走 IOHIDEventSystemClientUnregisterEventBlock
+     * 用错的那一个不会报错，只是解不掉：client 释放后回调仍挂在系统里，
+     * 下一次按键就会打到已释放的内存（表现为莫名其妙崩在 SpringBoard）。
+     */
+    if (gKeyMon.client) {
+        if (gKeyUsedBlock) {
+            if (pUnregisterCBBlk && gKeyBlock) {
+                typedef void (*PfnUnregBlock)(IOHIDEventSystemClientRef, id);
+                ((PfnUnregBlock)pUnregisterCBBlk)(gKeyMon.client, gKeyBlock);
+                YGLOG(@"HID key: 已解除 block 注册");
+            } else {
+                YGLOG(@"HID key: 缺 UnregisterEventBlock，block 注册无法解除（将随 client 释放）");
+            }
+        } else if (pUnregisterCB) {
+            typedef void (*PfnUnreg)(IOHIDEventSystemClientRef, void *);
+            ((PfnUnreg)pUnregisterCB)(gKeyMon.client, (void *)YGKeyEventCallback);
+            YGLOG(@"HID key: 已解除 callback 注册");
+        }
     }
+    gKeyBlock = nil;
+    gKeyUsedBlock = NO;
 
     CFRunLoopRef rl = gKeyMon.runloop;
     if (rl) {

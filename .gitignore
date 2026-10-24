@@ -21,3 +21,8 @@ Thumbs.db
 # Windows / WSL 中转
 build/
 out/
+
+# 本地私有：token / 运行日志 / 临时提交脚本
+.local/
+tools/gh_api.py
+tools/git_push.py
