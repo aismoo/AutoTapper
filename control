@@ -1,0 +1,9 @@
+Package: com.yg.autotapper
+Name: AutoTapper
+Version: 1.0.0
+Architecture: iphoneos-arm64
+Description: 屏幕定点循环点击注入插件。拖拽十字准星标记任意屏幕坐标，以可配置间隔自动循环点击；双击悬浮球启停，音量减键或面板按钮停止。基于 IOHIDEvent 私有 API，经 SpringBoard 注入后对前台任意 App 生效。
+Maintainer: YG
+Author: YG
+Section: Tweaks
+Depends: mobilesubstrate (>= 0.9.5000), firmware (>= 13.0)

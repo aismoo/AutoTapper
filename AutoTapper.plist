@@ -1,0 +1,38 @@
+/*
+ *  AutoTapper.plist — MobileSubstrate / ellekit 注入过滤器
+ *
+ *  只注入 SpringBoard。原因：
+ *    HID 后端 (IOHIDEventSystemClientDispatchEvent) 的事件由 backboardd
+ *    统一分发，在 SpringBoard 里发一次就对「前台任意 App」生效 ——
+ *    这就是需求里的「系统全局生效」，不需要注入每个 App。
+ *
+ *  ── 什么时候需要往某个 App 里也注一份 ──────────────────────────
+ *    1) HID 后端在你的系统上失效，想退到进程内后端
+ *       (SPRINGHID / UITOUCH / SENDEVENT) —— 它们只在被注入的进程里有效；
+ *    2) 目标 App 有反注入检测，把 SpringBoard 发来的合成事件过滤掉了。
+ *    做法：把 Bundle ID 追加进 Bundles 数组，例如
+ *        "com.tencent.xin",
+ *        "com.apple.mobilesafari"
+ *    然后重新 make package install + respring。
+ *    注意：App 进程里的 HOME 是 App 沙盒，配置（AutoTapper.json）与
+ *    SpringBoard 侧不共享，需要各自标记目标点。
+ *
+ *  ── 全 App 注入（仅调试用，不推荐）──────────────────────────────
+ *    把 Bundles 整段去掉，改用：
+ *        Classes = ("UIApplication");
+ *    每个加载 UIKit 的进程都会跑一份，各自建悬浮窗、各自读配置，
+ *    内存翻倍且 App Store 类应用对多余 dylib 更敏感。
+ */
+
+{
+    Filter = {
+        Bundles = (
+            "com.apple.springboard"
+        );
+    };
+
+    /* iOS 13.0 起（代码用了 UIWindowScene，内部另有 initWithFrame: 兜底） */
+    CoreFoundationVersion = (
+        1677.104
+    );
+}
