@@ -84,6 +84,23 @@ make package FINALPACKAGE=1
 `.github/workflows/build.yml` 会在 GitHub 的 macOS runner 上装 Theos + iOS SDK、
 跑三个离线自检、编包，然后把 `deb` 和 `dylib` 作为 Artifacts 上传（保留 30 天）。
 
+**本仓库已经跑通**：<https://github.com/aismoo/AutoTapper>
+
+| 项 | 值 |
+|---|---|
+| 工作流 | `.github/workflows/build.yml` |
+| 触发 | push 到 `main`/`master`（改 `.md` 不触发）、PR、手动 `workflow_dispatch` |
+| runner | `macos-14` |
+| Theos | 固定 commit `304e0799973e8145f32e4ca2de6c747a84b758ce`（可复现，不跟 master 漂） |
+| 已验证运行 | run `40086681950` → `success`，11 个 step 全绿 |
+
+第一次运行（`40086136526`）是 **failure**，原因是 `YGHID.m` 里
+`static id sKeyBlock` 只赋值不读取，被 Theos 默认的 `-Werror` 判为
+`unused-but-set-variable`。该问题已修（见 git 记录 `61ae8ce`），
+同时把 block 注册的解注册路径也一并纠正了。
+
+推送方式（用你自己的仓库地址）：
+
 ```bash
 git init && git add -A && git commit -m "AutoTapper"
 git remote add origin git@github.com:<你>/AutoTapper.git
@@ -98,11 +115,23 @@ push 之后进仓库的 **Actions → build → 最新一次运行 → Artifacts
 > 如果 `make` 报找不到 SDK，检查 workflow 里 `theos/sdks` 那步是否成功
 > （它会 clone theos/sdks 的完整仓库，其中含最新的 iOS 17/18 SDK）。
 
-产物：
+用命令行拉产物时有个坑：`GET /repos/{o}/{r}/actions/artifacts/{id}/zip`
+会 302 到 Azure Blob 预签名 URL，**若跟随重定向仍带 `Authorization` 头，
+Azure 直接返回 401**。本仓库的 `tools/fetch_artifact.py` 用自定义
+`HTTPRedirectHandler` 在重定向时剥掉该头：
+
+```bash
+python tools/fetch_artifact.py <artifact_id> AutoTapper-deb
+python tools/fetch_artifact.py <artifact_id> AutoTapper-dylib
+```
+
+产物（CI Artifacts 内）：
 
 ```
-packages/com.yg.autotapper_1.0.0_iphoneos-arm64.deb
-.theos/obj/debug/AutoTapper.dylib        # 未 strip 的 dylib（调试用）
+AutoTapper-deb.zip    → com.yg.autotapper_1.0.0_iphoneos-arm64.deb  (~61 KB)
+AutoTapper-dylib.zip  → AutoTapper.dylib（fat, arm64 + arm64e, ~362 KB）
+                        arm64/AutoTapper.dylib  (~164 KB)
+                        arm64e/AutoTapper.dylib (~163 KB)
 ```
 
 **只要 dylib 不要 deb**（给第 4 节的两种落地方式用）：
@@ -129,6 +158,35 @@ make package THEOS_PACKAGE_SCHEME= ARCHS=arm64
 # 调试版（带符号、不 strip）
 make package DEBUG=1
 ```
+
+---
+
+### 2.4 直接在真机上装 CI 产物
+
+从 Actions Artifacts 拿到的 `com.yg.autotapper_1.0.0_iphoneos-arm64.deb` 是 rootless 包，
+装法任选：
+
+```bash
+# USB / SSH 到设备
+scp com.yg.autotapper_1.0.0_iphoneos-arm64.deb root@<device_ip>:/var/mobile/
+ssh root@<device_ip>
+dpkg -i /var/mobile/com.yg.autotapper_1.0.0_iphoneos-arm64.deb
+killall -9 SpringBoard
+```
+
+或用 Filza 点开 deb 安装，或 `sileo` / `zebra` 本地导入。
+
+装完确认文件到位（rootless 一律在 `/var/jb` 下）：
+
+```bash
+ls -l /var/jb/Library/MobileSubstrate/DynamicLibraries/AutoTapper.*
+```
+
+应该看到 `AutoTapper.dylib` 和 `AutoTapper.plist` 两个文件。
+plist 的 `Filter.Bundles` 只有 `com.apple.springboard` —— 这是设计如此，
+只注入 SpringBoard 才能覆盖前台任意 App（原因见第 5 节）。
+
+重启 SpringBoard 后，屏幕右侧出现悬浮球即注入成功。
 
 ---
 

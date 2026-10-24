@@ -26,3 +26,4 @@ out/
 .local/
 tools/gh_api.py
 tools/git_push.py
+dist/
