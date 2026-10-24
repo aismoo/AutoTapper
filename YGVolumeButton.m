@@ -40,7 +40,6 @@
 #pragma mark - 状态
 
 static BOOL gAVOK = NO;
-static BOOL gMediaOK = NO;
 static BOOL gKBOK = NO;
 static BOOL gSBOK = NO;
 

@@ -1,0 +1,23 @@
+# Theos 构建产物
+.theos/
+packages/
+obj/
+*.deb
+*.dylib
+*.o
+
+# 签名 / 本地环境
+*.p12
+*.mobileprovision
+.env
+
+# 编辑器 / 系统
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+
+# Windows / WSL 中转
+build/
+out/
